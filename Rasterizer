@@ -1,0 +1,59 @@
+//Screen space rasterization
+void rst::rasterizer::rasterize_triangle(const Triangle& t) {
+    auto v = t.toVector4();
+    // TODO : Find out the bounding box of current triangle.
+    // iterate through the pixel and find if the current pixel is inside the triangle
+
+    // TODO : set the current pixel (use the set_pixel function) to the color of the triangle (use getColor function) if it should be painted.
+	float x_min = std::min({ v[0].x(), v[1].x(), v[2].x() });
+	float y_min = std::min({ v[0].y(), v[1].y(), v[2].y() });
+	float x_max = std::max({ v[0].x(), v[1].x(), v[2].x() });
+	float y_max = std::max({ v[0].y(), v[1].y(), v[2].y() });
+
+	for (int x = (int)x_min; x <= (int)x_max;x++) 
+	{
+		for (int y = (int)y_min; y <= (int)y_max; y++)
+		{
+			if (insideTriangle(x + 0.5f, y + 0.5f, t.v))
+			{
+				// If so, use the following code to get the interpolated z value.
+				auto[alpha, beta, gamma] = computeBarycentric2D(x, y, t.v);
+				float w_reciprocal = 1.0 / (alpha / v[0].w() + beta / v[1].w() + gamma / v[2].w()); 
+				// w_reciprocal 代表最后求出的正确深度 因为屏幕像素距离与实际3D距离的倒数成线性关系   系数只能×其倒数作插值  插值完后是正确距离的倒数 所以w_reciprocal取倒 作为当前像素点在屏幕像素空间的正确深度值
+				float z_interpolated = alpha * v[0].z() / v[0].w() + beta * v[1].z() / v[1].w() + gamma * v[2].z() / v[2].w();
+				z_interpolated *= w_reciprocal;
+				//疑问：为什么已经算出正确深度值了 还需要下面的代码？
+				//w_reciprocal算的是一个正确值 但是在底层来说它只是一个数字 承载它的变量不符合gpu的规定 所以需要用z_interpolated 
+				
+				//这两段的流程：
+				求像素点的z/w对顶点的z/w作插值 ----插值1/w求出3D距离w_reciprocal-----z_interpolated *= w_reciprocal相乘后算出符合GPU的深度缓存格式--存入缓冲区比较
+				if (z_interpolated < depth_buf[get_index(x, y)])
+				{
+					depth_buf[get_index(x, y)] = z_interpolated;
+					// 设置像素颜色 (注意：需要包含 z 值)
+					Eigen::Vector3f point(x, y, z_interpolated);
+					set_pixel(point, t.getColor());
+				}
+
+			}
+		}
+	}
+}
+
+这个是对传进的顶点进行光栅化三角形绘制图像函数；
+先找出围城三角形的矩形 那么先找出最小的x值和y值以及最大x值y值；
+要对像素点上色 那么必须要知道在同一个地方的不同像素点的深度是否靠近摄像机
+要遍历每一个像素点 使用双循环遍历 如果bool insideTriangle函数返回真 那么像素中心在三角形内部 既然在内部 就通过插值将三个顶点以外的像素坐标算出
+
+作业要求理解：
+depth_buf的定义:
+它是一个一维的动态数组 根据get_index(x,y)函数获取像素在数组对应的索引来进行深度缓冲的更新
+Z value 的符号：
+永远是正数 越大距离远点越远 在投影变换的矩阵里面 
+    //定义投影矩阵
+    M_projection(0,0) = n;
+    M_projection(1,1) = n;
+    M_projection(2,2) = n + f;
+    M_projection(2,3) = n * f;
+    M_projection(3,2) = -1;
+原始坐标是负 变换后是正数
